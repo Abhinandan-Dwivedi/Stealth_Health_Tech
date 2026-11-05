@@ -155,3 +155,39 @@ You must understand every line you submit. We check this with your video and in 
 5. Paste the repository link and the video link in the application form.
 
 We will run `pnpm install && pnpm check && pnpm typecheck && pnpm test` on your repository.
+
+## Decisions
+
+### 1. Atomic Check-and-Set for Concurrent Payment Idempotency
+
+- **Decision:** In `POST /api/bills/:billId/shares/:shareId/pay`, payment processing relies on an atomic SQL operation:
+  `UPDATE shares SET paid_at = ?, idempotency_key = ? WHERE id = ? AND bill_id = ? AND paid_at IS NULL` alongside a `UNIQUE (idempotency_key)` constraint.
+- **Why:** In concurrent environments, two simultaneous payment requests could result in double-charging or race conditions if we relied on separate check and update queries. By leveraging SQLite's row-level update atomicity, only one request will execute the state transition (`changes === 1`). The other request observes zero modifications and can immediately inspect the record to distinguish between a valid idempotent replay (same key, HTTP 200) and a conflicting attempt (different key, HTTP 409).
+
+### 2. Deterministic Integer Remainder Splitting by Addition Order
+
+- **Decision:** All financial calculations operate strictly in integer cents using integer division (`Math.floor(totalCents / n)`) and remainder distribution (`totalCents % n`), with the extra cents awarded to members in order of `created_at ASC, rowid ASC`.
+- **Why:** Floating point numbers are susceptible to rounding drift. Pure integer math guarantees that $\sum \text{shares} = \text{totalCents}$ under all conditions (penny conservation). Ordering by creation timestamp and SQLite `rowid` guarantees complete determinism regardless of query conditions or execution order.
+
+### 3. Named Schema Constraints as Defense-in-Depth
+
+- **Decision:** Enforced named integrity constraints directly in the D1 SQLite migration (`fk_members_home`, `chk_members_name_not_empty`, `fk_bills_home`, `chk_bills_total_positive`, `fk_shares_bill`, `fk_shares_member`, `chk_shares_amount_non_negative`, and `uq_shares_idempotency`).
+- **Why:** Application-level validation is essential for good user feedback, but schema-level constraints provide an unbreakable safety net. They guarantee that corrupted states—such as negative shares, orphaned bills, empty names, or duplicate idempotency keys—can never be persisted even if unexpected errors or concurrent edge cases bypass application layers.
+
+## Decisions
+
+### 1. Atomic Check-and-Set for Concurrent Payment Idempotency
+
+- **Decision:** In `POST /api/bills/:billId/shares/:shareId/pay`, payment processing relies on an atomic SQL operation:
+  `UPDATE shares SET paid_at = ?, idempotency_key = ? WHERE id = ? AND bill_id = ? AND paid_at IS NULL` alongside a `UNIQUE (idempotency_key)` constraint.
+- **Why:** In concurrent environments, two simultaneous payment requests could result in double-charging or race conditions if we relied on separate check and update queries. By leveraging SQLite's row-level update atomicity, only one request will execute the state transition (`changes === 1`). The other request observes zero modifications and can immediately inspect the record to distinguish between a valid idempotent replay (same key, HTTP 200) and a conflicting attempt (different key, HTTP 409).
+
+### 2. Deterministic Integer Remainder Splitting by Addition Order
+
+- **Decision:** All financial calculations operate strictly in integer cents using integer division (`Math.floor(totalCents / n)`) and remainder distribution (`totalCents % n`), with the extra cents awarded to members in order of `created_at ASC, rowid ASC`.
+- **Why:** Floating point numbers are susceptible to rounding drift. Pure integer math guarantees that $\sum \text{shares} = \text{totalCents}$ under all conditions (penny conservation). Ordering by creation timestamp and SQLite `rowid` guarantees complete determinism regardless of query conditions or execution order.
+
+### 3. Named Schema Constraints as Defense-in-Depth
+
+- **Decision:** Enforced named integrity constraints directly in the D1 SQLite migration (`fk_members_home`, `chk_members_name_not_empty`, `fk_bills_home`, `chk_bills_total_positive`, `fk_shares_bill`, `fk_shares_member`, `chk_shares_amount_non_negative`, and `uq_shares_idempotency`).
+- **Why:** Application-level validation is essential for good user feedback, but schema-level constraints provide an unbreakable safety net. They guarantee that corrupted states—such as negative shares, orphaned bills, empty names, or duplicate idempotency keys—can never be persisted even if unexpected errors or concurrent edge cases bypass application layers.
